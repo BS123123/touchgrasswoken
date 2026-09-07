@@ -90,6 +90,20 @@ export function broadcastPosition(channel, playerId, x, y, facing) {
   });
 }
 
+
+/**
+ * Sends combat state/events through the same realtime world channel.
+ * Combat is event based instead of being written to Postgres.
+ */
+export function broadcastCombat(channel, payload) {
+  if (!channel) return;
+  channel.send({
+    type: 'broadcast',
+    event: 'combat',
+    payload,
+  });
+}
+
 export function leaveWorldChannel(channel) {
   if (channel) supabase.removeChannel(channel);
 }
