@@ -1,41 +1,57 @@
 // supabase-client.js
+// ---------------------------------------------------------------
+// All Supabase wiring lives here. game.js and index.html never
+// talk to Supabase directly - they import from this file.
+// ---------------------------------------------------------------
+
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+// Your project URL (from the Supabase dashboard) - fixed, not an env var.
+const SUPABASE_URL = 'https://hbszpgfwytfpehjdpnpq.supabase.co';
+
+// The anon/public key is safe to ship to the browser, but Vite still
+// requires it to come through import.meta.env with a VITE_ prefix -
+// process.env does not exist in browser code. See the .env note below.
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const isConfigured = !!SUPABASE_URL && !!SUPABASE_ANON_KEY;
+const isConfigured = !!SUPABASE_ANON_KEY;
 
 export const supabase = isConfigured
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
+// Fallback worlds used only if the anon key is missing, so the
+// template still runs standalone instead of crashing.
 const FALLBACK_SERVERS = [
   { id: 'meadow', name: 'Sunken Meadow', description: 'gentle starter world' },
-  {
-    id: 'ember-caves',
-    name: 'Ember Caves',
-    description: 'hard mode, lava everywhere',
-  },
+  { id: 'ember-caves', name: 'Ember Caves', description: 'hard mode, lava everywhere' },
   { id: 'the-drift', name: 'The Drift', description: 'pvp enabled' },
 ];
 
+/**
+ * Reads rows from a "servers" table:
+ *   id text primary key, name text, description text
+ * Falls back to a static list if the anon key isn't set yet.
+ */
 export async function fetchServers() {
   if (!supabase) return { servers: FALLBACK_SERVERS, live: false };
+
   const { data, error } = await supabase
     .from('servers')
     .select('id, name, description')
     .order('name', { ascending: true });
+
   if (error || !data || data.length === 0) {
     return { servers: FALLBACK_SERVERS, live: false };
   }
   return { servers: data, live: true };
 }
+
 /**
  * Opens (or reuses) a realtime channel scoped to one server/world.
- * Position updates are sent as ephemeral "broadcast" events, not
- * written to the database - that keeps movement smooth and avoids
- * hammering Postgres with 30+ writes/sec per player. Presence is
+ * Position updates travel as ephemeral "broadcast" events, not
+ * database writes - that keeps movement smooth and avoids
+ * hammering Postgres with 15+ writes/sec per player. Presence is
  * used only to know who is currently online.
  */
 export function joinWorldChannel(serverId, playerId, username, handlers) {
