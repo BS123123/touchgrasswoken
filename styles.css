@@ -194,6 +194,8 @@ html, body {
 #hud-right { display: flex; align-items: center; gap: 16px; }
 #hud-players { color: var(--moss); }
 
+
+
 #leave-btn {
   font-family: var(--font-pixel);
   font-size: 9px;

@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Your project URL (from the Supabase dashboard) - fixed, not an env var.
-const SUPABASE_URL = 'https://hbszpgfwytfpehjdpnpq.supabase.co';
+const SUPABASE_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 // The anon/public key is safe to ship to the browser, but Vite still
 // requires it to come through import.meta.env with a VITE_ prefix -
