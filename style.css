@@ -1,0 +1,225 @@
+:root {
+  --void: #12101a;
+  --panel: #1f1b2e;
+  --panel-edge: #322c47;
+  --moss: #5c8253;
+  --ember: #d98b3f;
+  --ember-dim: #a5652a;
+  --parchment: #ead9b0;
+  --blood: #8a3636;
+  --sky: #3a5a70;
+  --font-pixel: 'Press Start 2P', monospace;
+  --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--void);
+  color: var(--parchment);
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+
+.screen {
+  height: 100vh;
+  width: 100vw;
+}
+
+.hidden { display: none !important; }
+
+/* ---------- Menu screen ---------- */
+#menu-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  flex-wrap: wrap;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(217,139,63,0.08), transparent 40%),
+    radial-gradient(circle at 80% 80%, rgba(58,90,112,0.12), transparent 45%),
+    var(--void);
+}
+
+.menu-card {
+  background: var(--panel);
+  border: 3px solid var(--panel-edge);
+  border-radius: 4px;
+  padding: 32px 28px;
+  width: 320px;
+  box-shadow: 0 0 0 4px rgba(0,0,0,0.35), 0 20px 40px rgba(0,0,0,0.5);
+}
+
+.title {
+  font-family: var(--font-pixel);
+  font-size: 22px;
+  color: var(--ember);
+  letter-spacing: 1px;
+  margin: 0 0 10px;
+  text-shadow: 3px 3px 0 rgba(0,0,0,0.4);
+}
+
+.tagline {
+  font-size: 13px;
+  color: var(--parchment);
+  opacity: 0.7;
+  margin: 0 0 24px;
+}
+
+.field-label {
+  display: block;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  color: var(--moss);
+  margin-bottom: 6px;
+}
+
+.field-input {
+  width: 100%;
+  background: var(--void);
+  border: 2px solid var(--panel-edge);
+  color: var(--parchment);
+  font-family: var(--font-body);
+  font-size: 14px;
+  padding: 10px 12px;
+  border-radius: 3px;
+  margin-bottom: 18px;
+}
+
+.field-input:focus {
+  outline: none;
+  border-color: var(--ember);
+}
+
+.play-btn {
+  width: 100%;
+  padding: 14px;
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  color: var(--void);
+  background: var(--ember);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.play-btn:hover:not(:disabled) { background: #e5a05c; }
+.play-btn:active:not(:disabled) { transform: translateY(2px); }
+.play-btn:disabled {
+  background: var(--ember-dim);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.menu-error {
+  color: var(--blood);
+  font-size: 12px;
+  min-height: 16px;
+  margin-top: 10px;
+}
+
+.server-status {
+  font-size: 11px;
+  opacity: 0.6;
+  margin: -10px 0 18px;
+}
+
+.server-list-panel {
+  background: var(--panel);
+  border: 3px solid var(--panel-edge);
+  border-radius: 4px;
+  padding: 24px;
+  width: 280px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.panel-heading {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  color: var(--sky);
+  margin: 0 0 16px;
+}
+
+#server-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#server-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--void);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+#server-list .server-players {
+  font-size: 11px;
+  color: var(--moss);
+}
+
+/* ---------- Game screen ---------- */
+#game-screen {
+  position: relative;
+  background: var(--void);
+}
+
+#hud {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: linear-gradient(rgba(0,0,0,0.55), transparent);
+  z-index: 5;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+}
+
+#hud-world { color: var(--ember); }
+
+#hud-right { display: flex; align-items: center; gap: 16px; }
+#hud-players { color: var(--moss); }
+
+#leave-btn {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  background: var(--blood);
+  color: var(--parchment);
+  border: none;
+  padding: 8px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+#game-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  image-rendering: pixelated;
+}
+
+.controls-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--parchment);
+  opacity: 0.55;
+  z-index: 5;
+  pointer-events: none;
+}

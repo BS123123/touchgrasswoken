@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Realmforge — 2D RPG Template</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ============ HOME / SERVER SELECT SCREEN ============ -->
+  <section id="menu-screen" class="screen">
+    <div class="menu-card">
+      <h1 class="title">REALMFORGE</h1>
+      <p class="tagline">pick a name, pick a world, start digging</p>
+
+      <label class="field-label" for="username">your name</label>
+      <input id="username" class="field-input" type="text" maxlength="16" placeholder="Wanderer" />
+
+      <label class="field-label" for="server-select">world</label>
+      <select id="server-select" class="field-input"></select>
+      <p id="server-status" class="server-status">loading worlds…</p>
+
+      <button id="play-btn" class="play-btn" disabled>ENTER WORLD</button>
+      <p id="menu-error" class="menu-error"></p>
+    </div>
+
+    <div class="server-list-panel">
+      <h2 class="panel-heading">worlds online</h2>
+      <ul id="server-list"></ul>
+    </div>
+  </section>
+
+  <!-- ============ GAME SCREEN ============ -->
+  <section id="game-screen" class="screen hidden">
+    <div id="hud">
+      <div id="hud-left">
+        <span id="hud-world"></span>
+      </div>
+      <div id="hud-right">
+        <span id="hud-players">1 online</span>
+        <button id="leave-btn">leave world</button>
+      </div>
+    </div>
+    <canvas id="game-canvas"></canvas>
+    <p class="controls-hint">A / D move · SPACE jump</p>
+  </section>
+
+  <script type="module" src="supabase-client.js"></script>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
