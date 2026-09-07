@@ -12,7 +12,7 @@ const SUPABASE_URL = 'https://hbszpgfwytfpehjdpnpq.supabase.co';
 // The anon/public key is safe to ship to the browser, but Vite still
 // requires it to come through import.meta.env with a VITE_ prefix -
 // process.env does not exist in browser code. See the .env note below.
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhic3pwZ2Z3eXRmcGVoamRwbnBxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwNTM2MDAsImV4cCI6MjA4NDYyOTYwMH0.IbYz2Ah-TR0ssQ_Yv5ycjrC8gcnJDzwJ8-XEXU6gL88';
 
 const isConfigured = !!SUPABASE_ANON_KEY;
 
