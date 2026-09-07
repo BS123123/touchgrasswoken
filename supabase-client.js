@@ -1,109 +1,54 @@
 // supabase-client.js
-// ---------------------------------------------------------------
-// All Supabase wiring lives here. game.js and index.html never
-// talk to Supabase directly - they import from this file.
-// ---------------------------------------------------------------
-
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
-// Your project URL (from the Supabase dashboard) - fixed, not an env var.
-const SUPABASE_URL = 'https://hbszpgfwytfpehjdpnpq.supabase.co';
+const SUPABASE_URL='https://hbszpgfwytfpehjdpnpq.supabase.co';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhic3pwZ2Z3eXRmcGVoamRwbnBxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwNTM2MDAsImV4cCI6MjA4NDYyOTYwMH0.IbYz2Ah-TR0ssQ_Yv5ycjrC8gcnJDzwJ8-XEXU6gL88';
+export const supabase=SUPABASE_ANON_KEY?createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+const FALLBACK_SERVERS=[
+{id:'meadow',name:'Sunken Meadow',description:'starter world'},
+{id:'ember-caves',name:'Ember Caves',description:'hard world'},
+{id:'the-drift',name:'The Drift',description:'pvp world'}];
 
-// The anon/public key is safe to ship to the browser, but Vite still
-// requires it to come through import.meta.env with a VITE_ prefix -
-// process.env does not exist in browser code. See the .env note below.
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhic3pwZ2Z3eXRmcGVoamRwbnBxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwNTM2MDAsImV4cCI6MjA4NDYyOTYwMH0.IbYz2Ah-TR0ssQ_Yv5ycjrC8gcnJDzwJ8-XEXU6gL88';
-
-const isConfigured = !!SUPABASE_ANON_KEY;
-
-export const supabase = isConfigured
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
-
-// Fallback worlds used only if the anon key is missing, so the
-// template still runs standalone instead of crashing.
-const FALLBACK_SERVERS = [
-  { id: 'meadow', name: 'Sunken Meadow', description: 'gentle starter world' },
-  { id: 'ember-caves', name: 'Ember Caves', description: 'hard mode, lava everywhere' },
-  { id: 'the-drift', name: 'The Drift', description: 'pvp enabled' },
-];
-
-/**
- * Reads rows from a "servers" table:
- *   id text primary key, name text, description text
- * Falls back to a static list if the anon key isn't set yet.
- */
-export async function fetchServers() {
-  if (!supabase) return { servers: FALLBACK_SERVERS, live: false };
-
-  const { data, error } = await supabase
-    .from('servers')
-    .select('id, name, description')
-    .order('name', { ascending: true });
-
-  if (error || !data || data.length === 0) {
-    return { servers: FALLBACK_SERVERS, live: false };
-  }
-  return { servers: data, live: true };
+export async function fetchServers(){
+ if(!supabase)return{servers:FALLBACK_SERVERS,live:false};
+ const {data,error}=await supabase.from('servers').select('id,name,description').order('name');
+ if(error||!data?.length)return{servers:FALLBACK_SERVERS,live:false};
+ return{servers:data,live:true};
 }
 
-/**
- * Opens (or reuses) a realtime channel scoped to one server/world.
- * Position updates travel as ephemeral "broadcast" events, not
- * database writes - that keeps movement smooth and avoids
- * hammering Postgres with 15+ writes/sec per player. Presence is
- * used only to know who is currently online.
- */
-export function joinWorldChannel(serverId, playerId, username, handlers) {
-  if (!supabase) return null; // offline / solo mode
-
-  const channel = supabase.channel(`world:${serverId}`, {
-    config: { presence: { key: playerId }, broadcast: { self: false } },
-  });
-
-  channel
-    .on('broadcast', { event: 'pos' }, ({ payload }) => {
-      handlers.onPeerMove?.(payload);
-    })
-    .on('presence', { event: 'sync' }, () => {
-      handlers.onPresenceSync?.(channel.presenceState());
-    })
-    .on('presence', { event: 'leave' }, ({ key }) => {
-      handlers.onPeerLeave?.(key);
-    })
-    .subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await channel.track({ username, joinedAt: Date.now() });
-        handlers.onSubscribed?.();
-      }
-    });
-
-  return channel;
+export async function ensureAuth(){
+ if(!supabase)return null;
+ const {data:{session}}=await supabase.auth.getSession();
+ if(session?.user)return session.user;
+ const {data,error}=await supabase.auth.signInAnonymously();
+ return error?null:data.user;
 }
 
-export function broadcastPosition(channel, playerId, x, y, facing) {
-  if (!channel) return;
-  channel.send({
-    type: 'broadcast',
-    event: 'pos',
-    payload: { id: playerId, x, y, facing },
-  });
+export async function loadSlot(slotId=1){
+ if(!supabase)return JSON.parse(localStorage.getItem(`realmforge_slot_${slotId}`)||'null');
+ const user=await ensureAuth(); if(!user)return null;
+ const {data}=await supabase.from('player_slots').select('slot_data').eq('user_id',user.id).eq('slot_id',slotId).maybeSingle();
+ return data?.slot_data||null;
+}
+export async function saveSlot(slotData,slotId=1){
+ const payload={slot_id:slotId,slot_data:slotData,updated_at:new Date().toISOString()};
+ if(!supabase){localStorage.setItem(`realmforge_slot_${slotId}`,JSON.stringify(slotData));return;}
+ const user=await ensureAuth();if(!user)return;
+ await supabase.from('player_slots').upsert({...payload,user_id:user.id},{onConflict:'user_id,slot_id'});
 }
 
-
-/**
- * Sends combat state/events through the same realtime world channel.
- * Combat is event based instead of being written to Postgres.
- */
-export function broadcastCombat(channel, payload) {
-  if (!channel) return;
-  channel.send({
-    type: 'broadcast',
-    event: 'combat',
-    payload,
-  });
+export function joinWorldChannel(serverId,playerId,username,handlers){
+ if(!supabase)return null;
+ const channel=supabase.channel(`world:${serverId}`,{config:{presence:{key:playerId},broadcast:{self:false}}});
+ channel.on('broadcast',{event:'pos'},({payload})=>handlers.onPeerMove?.(payload))
+   .on('broadcast',{event:'combat'},({payload})=>handlers.onPeerCombat?.(payload))
+   .on('presence',{event:'sync'},()=>handlers.onPresenceSync?.(channel.presenceState()))
+   .on('presence',{event:'leave'},({key})=>handlers.onPeerLeave?.(key))
+   .subscribe(async status=>{if(status==='SUBSCRIBED'){await channel.track({username,joinedAt:Date.now()});handlers.onSubscribed?.();}});
+ return channel;
 }
-
-export function leaveWorldChannel(channel) {
-  if (channel) supabase.removeChannel(channel);
+export function broadcastPosition(channel,id,x,y,facing,hp=100,maxHp=100){
+ if(!channel)return;channel.send({type:'broadcast',event:'pos',payload:{id,x,y,facing,hp,maxHp}});
 }
+export function broadcastCombat(channel,payload){if(!channel)return;channel.send({type:'broadcast',event:'combat',payload});}
+export function leaveWorldChannel(channel){if(channel&&supabase)supabase.removeChannel(channel);}

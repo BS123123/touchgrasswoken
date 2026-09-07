@@ -1,704 +1,159 @@
-// game.js
+// game.js - Realmforge multiplayer RPG upgrade
 import {
-  fetchServers,
-  joinWorldChannel,
-  broadcastPosition,
-  broadcastCombat,
-  leaveWorldChannel
+  fetchServers, joinWorldChannel, broadcastPosition, broadcastCombat,
+  leaveWorldChannel, loadSlot, saveSlot
 } from "./supabase-client.js";
 
-// ============================================================
-// 1. MENU
-// ============================================================
-const menuScreen = document.getElementById("menu-screen");
-const gameScreen = document.getElementById("game-screen");
-const usernameInput = document.getElementById("username");
-const serverSelect = document.getElementById("server-select");
-const serverStatus = document.getElementById("server-status");
-const serverListEl = document.getElementById("server-list");
-const playBtn = document.getElementById("play-btn");
-const menuError = document.getElementById("menu-error");
-const leaveBtn = document.getElementById("leave-btn");
-const hudWorld = document.getElementById("hud-world");
-const hudPlayers = document.getElementById("hud-players");
+const menuScreen=document.getElementById("menu-screen"), gameScreen=document.getElementById("game-screen");
+const usernameInput=document.getElementById("username"), serverSelect=document.getElementById("server-select");
+const serverStatus=document.getElementById("server-status"), serverListEl=document.getElementById("server-list");
+const playBtn=document.getElementById("play-btn"), menuError=document.getElementById("menu-error");
+const leaveBtn=document.getElementById("leave-btn"), hudWorld=document.getElementById("hud-world"), hudPlayers=document.getElementById("hud-players");
+const canvas=document.getElementById("game-canvas"), ctx=canvas.getContext("2d");
 
-let servers = [];
+let servers=[], map, channel=null, playerId, running=false, rafId=null, lastTime=0, broadcastTimer=0;
+const peers=new Map(), mobs=new Map();
+const keys={left:false,right:false,jump:false,guard:false};
+const TILE=32, MAP_ROWS=20, MAP_COLS=120, GRAVITY=1400;
+const WORLD={dayLength:240, nightStart:120, nightEnd:240, mobCap:5, mobSpawnEvery:18};
+const COMBAT={m1Damage:20,attackDuration:.20,attackCooldown:.38,range:42,height:28,parryWindow:.14,parryCooldown:.45,guardBreak:.65};
+const SKILLS=[
+  {id:"firebolt",name:"Fire Bolt",element:"fire",damage:28,cooldown:3,mana:0,color:"#ff9a3c"},
+  {id:"iceburst",name:"Ice Burst",element:"ice",damage:22,cooldown:4,mana:0,color:"#8dd8ff"},
+  {id:"windslash",name:"Wind Slash",element:"wind",damage:32,cooldown:5,mana:0,color:"#d8f0d0"},
+  {id:"heal",name:"Renew",element:"life",heal:25,cooldown:8,mana:0,color:"#9cffb0"},
+  {id:"thunder",name:"Thunder",element:"lightning",damage:45,cooldown:10,mana:0,color:"#fff38a"},
+  {id:"flamewave",name:"Flame Wave",element:"fire",damage:38,cooldown:9,mana:0,color:"#ff6a3d"},
+  {id:"frostguard",name:"Frost Guard",element:"ice",damage:0,cooldown:12,mana:0,color:"#bdefff"},
+  {id:"earthslam",name:"Earth Slam",element:"earth",damage:35,cooldown:8,mana:0,color:"#c7a16b"},
+  {id:"dash",name:"Wind Step",element:"wind",damage:0,cooldown:5,mana:0,color:"#d6fff1"},
+  {id:"execute",name:"Execution",element:"void",damage:60,cooldown:14,mana:0,color:"#d3a8ff"}
+];
 
-async function loadServers() {
-  const { servers: list, live } = await fetchServers();
-  servers = list;
-  serverSelect.innerHTML = list.map(
-    (s) => `<option value="${s.id}">${s.name}</option>`
-  ).join("");
-  serverListEl.innerHTML = list.map(
-    (s) => `<li><span>${s.name}</span><span class="server-players">${s.description ?? ""}</span></li>`
-  ).join("");
-  serverStatus.textContent = live
-    ? "connected to Supabase"
-    : "offline demo worlds (add your Supabase keys)";
-  playBtn.disabled = list.length === 0;
+const player={x:0,y:0,w:20,h:30,vx:0,vy:0,onGround:false,facing:1,speed:180,jumpForce:480,username:"Wanderer",
+ hp:100,maxHp:100,level:1,exp:0,expNext:100,skills:[],skillCooldowns:{},weapon:"Training Blade",
+ attackUntil:0,attackCooldownUntil:0,attackHit:false,guardUntil:0,parryUntil:0,parryCooldownUntil:0,guardBrokenUntil:0,invulnUntil:0};
+const camera={x:0,y:0};
+
+function generateMap(){const m=Array.from({length:MAP_ROWS},()=>new Array(MAP_COLS).fill(0));const groundY=13;
+ for(let x=0;x<MAP_COLS;x++){const top=Math.max(2,Math.min(MAP_ROWS-1,groundY+Math.round(Math.sin(x*.15)*2)));for(let y=top;y<MAP_ROWS;y++)m[y][x]=1;
+  if(x%11===0&&x>5){const py=top-4;for(let px=x;px<x+3&&px<MAP_COLS;px++)if(py>=0)m[py][px]=1;}}return m;}
+function isSolid(c,r){return r<0||r>=MAP_ROWS||c<0||c>=MAP_COLS||map[r][c]===1;}
+function resolveH(e,dx){if(!dx)return;const t=Math.floor(e.y/TILE),b=Math.floor((e.y+e.h-.001)/TILE);
+ if(dx>0){const c=Math.floor((e.x+e.w-.001)/TILE);for(let r=t;r<=b;r++)if(isSolid(c,r)){e.x=c*TILE-e.w;e.vx=0;return;}}
+ else{const c=Math.floor(e.x/TILE);for(let r=t;r<=b;r++)if(isSolid(c,r)){e.x=(c+1)*TILE;e.vx=0;return;}}}
+function resolveV(e,dy){e.onGround=false;if(!dy)return;const l=Math.floor((e.x+.001)/TILE),r=Math.floor((e.x+e.w-.001)/TILE);
+ if(dy>0){const row=Math.floor((e.y+e.h-.001)/TILE);for(let c=l;c<=r;c++)if(isSolid(c,row)){e.y=row*TILE-e.h;e.vy=0;e.onGround=true;return;}}
+ else{const row=Math.floor(e.y/TILE);for(let c=l;c<=r;c++)if(isSolid(c,row)){e.y=(row+1)*TILE;e.vy=0;return;}}}
+function move(e,dx,dy){e.x+=dx;resolveH(e,dx);e.y+=dy;resolveV(e,dy);e.x=Math.max(0,Math.min(e.x,MAP_COLS*TILE-e.w));e.y=Math.max(0,Math.min(e.y,MAP_ROWS*TILE-e.h));}
+function findSpawn(col=4){for(let radius=0;radius<MAP_COLS/2;radius++){for(const c of (radius?[col-radius,col+radius]:[col]))if(c>=0&&c<MAP_COLS)for(let r=1;r<MAP_ROWS;r++)if(isSolid(c,r)&&!isSolid(c,r-1)&&!isSolid(c,r-2))return{x:c*TILE+6,y:r*TILE-player.h-.01};}return{x:128,y:300};}
+
+function resizeCanvas(){canvas.width=innerWidth;canvas.height=innerHeight;} addEventListener("resize",resizeCanvas);
+function now(){return performance.now()/1000;}
+function overlaps(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;}
+function attackBox(a){return a.facing===1?{x:a.x+a.w-2,y:a.y+5,w:COMBAT.range,h:COMBAT.height}:{x:a.x-COMBAT.range+2,y:a.y+5,w:COMBAT.range,h:COMBAT.height};}
+function isParrying(p){return p.parryUntil>now();} function isBlocking(p){return p.guardUntil>now()&&!isParrying(p);}
+function isNight(){const t=(Date.now()/1000)%WORLD.dayLength;return t>=WORLD.nightStart;}
+function cycleText(){const t=(Date.now()/1000)%WORLD.dayLength;return t<WORLD.nightStart?"DAY":"NIGHT";}
+
+function gainExp(amount,reason){player.exp+=amount;let leveled=false;while(player.exp>=player.expNext){player.exp-=player.expNext;player.level++;player.expNext=Math.floor(player.expNext*1.25);leveled=true;
+  const newSkill=SKILLS[player.level-1]; if(newSkill&&!player.skills.includes(newSkill.id))player.skills.push(newSkill.id);}
+ if(leveled) broadcastCombat(channel,{id:playerId,type:"levelup",level:player.level}); saveProgress();}
+function saveProgress(){saveSlot({slotId:1,username:player.username,level:player.level,exp:player.exp,expNext:player.expNext,hp:player.hp,skills:player.skills,weapon:player.weapon}).catch(()=>{});}
+async function loadProgress(){const d=await loadSlot(1);if(d){player.username=d.username||player.username;player.level=d.level||1;player.exp=d.exp||0;player.expNext=d.expNext||100;player.skills=Array.isArray(d.skills)?d.skills:SKILLS.slice(0,player.level).map(s=>s.id);player.weapon=d.weapon||"Training Blade";}}
+
+function damagePlayer(amount,sourceId,type="hit"){const t=now();if(t<player.invulnUntil||t<player.guardBrokenUntil)return;
+ if(player.hp<=0)return;player.hp=Math.max(0,player.hp-amount);player.invulnUntil=t+.25;
+ if(player.hp===0){player.hp=100;const sp=findSpawn();player.x=sp.x;player.y=sp.y;broadcastCombat(channel,{id:playerId,type:"death",sourceId});}
+ saveProgress();}
+function damagePeer(peer,amount,source,type="hit"){broadcastCombat(channel,{id:playerId,type:"damage",targetId:peer.id,amount,source,kind:type,at:now()});}
+
+function startAttack(){const t=now();if(t<player.attackCooldownUntil||t<player.guardBrokenUntil)return;player.guardUntil=player.parryUntil=0;player.attackUntil=t+COMBAT.attackDuration;player.attackCooldownUntil=t+COMBAT.attackCooldown;player.attackHit=false;
+ broadcastCombat(channel,{id:playerId,type:"attack",facing:player.facing,at:t});}
+function startGuard(){const t=now();if(t<player.parryCooldownUntil||t<player.guardBrokenUntil)return;player.parryUntil=t+COMBAT.parryWindow;player.guardUntil=t+9999;player.parryCooldownUntil=t+COMBAT.parryCooldown;
+ broadcastCombat(channel,{id:playerId,type:"parry_start",facing:player.facing,at:t});}
+function endGuard(){player.guardUntil=player.parryUntil=0;broadcastCombat(channel,{id:playerId,type:"guard_end",at:now()});}
+
+function processAttack(){if(player.attackHit||!isAttacking(player))return;const t=now();if(player.attackUntil-t>COMBAT.attackDuration*.65)return;player.attackHit=true;const hb=attackBox(player);
+ for(const peer of peers.values()){if(!overlaps(hb,peer))continue;if(peer.parryUntil>t){broadcastCombat(channel,{id:playerId,type:"parried",targetId:peer.id,at:t});}
+  else if(peer.guardUntil>t){broadcastCombat(channel,{id:playerId,type:"guard_hit",targetId:peer.id,amount:COMBAT.m1Damage,at:t});}
+  else damagePeer(peer,COMBAT.m1Damage,playerId,"m1");}
+ for(const m of mobs.values())if(!m.dead&&overlaps(hb,m)){m.hp-=COMBAT.m1Damage;broadcastCombat(channel,{id:playerId,type:"mob_damage",mobId:m.id,amount:COMBAT.m1Damage,at:t});if(m.hp<=0)killMob(m);}}
+function isAttacking(p){return p.attackUntil>now();}
+function castSkill(slot){const idx=slot-1;if(idx<0||idx>=10)return;const id=player.skills[idx];const s=SKILLS.find(x=>x.id===id);if(!s)return;const t=now();if((player.skillCooldowns[id]||0)>t)return;player.skillCooldowns[id]=t+s.cooldown;
+ if(id==="heal"){player.hp=Math.min(100,player.hp+25);broadcastCombat(channel,{id:playerId,type:"skill",skill:id});return;}
+ if(id==="dash"){player.x+=player.facing*90;player.invulnUntil=t+.25;broadcastCombat(channel,{id:playerId,type:"skill",skill:id,x:player.x,y:player.y});return;}
+ if(id==="frostguard"){player.invulnUntil=t+1.5;broadcastCombat(channel,{id:playerId,type:"skill",skill:id});return;}
+ const hb={x:player.facing===1?player.x+player.w:player.x-120,y:player.y-8,w:120,h:50};
+ for(const p of peers.values())if(overlaps(hb,p)){if(p.parryUntil>t)continue;damagePeer(p,s.damage,playerId,s.element);}
+ for(const m of mobs.values())if(!m.dead&&overlaps(hb,m)){m.hp-=s.damage;broadcastCombat(channel,{id:playerId,type:"mob_damage",mobId:m.id,amount:s.damage,at:t});if(m.hp<=0)killMob(m);}
+ broadcastCombat(channel,{id:playerId,type:"skill",skill:id});
 }
+function killMob(m){if(m.dead)return;m.dead=true;gainExp(35,"mob");broadcastCombat(channel,{id:playerId,type:"mob_kill",mobId:m.id,exp:35});}
+
+function spawnMobs(dt){if(!isNight())return;spawnMobs.timer=(spawnMobs.timer||0)+dt;if(spawnMobs.timer<WORLD.mobSpawnEvery||mobs.size>=WORLD.mobCap)return;spawnMobs.timer=0;
+ const col=20+Math.floor(Math.random()*(MAP_COLS-40));let row=1;for(;row<MAP_ROWS&& !isSolid(col,row);row++);if(row>=MAP_ROWS)return;
+ const id=`${serverId}-${Math.floor(Date.now()/1000)}-${Math.random().toString(36).slice(2,6)}`;
+ mobs.set(id,{id,x:col*TILE,y:row*TILE-26,w:22,h:26,vx:0,vy:0,hp:80,maxHp:80,damage:10,dead:false,attackAt:0});
+ broadcastCombat(channel,{id:playerId,type:"mob_spawn",mob:{id,x:col*TILE,y:row*TILE-26,hp:80,maxHp:80}});
+}
+let serverId="";
+function updateMobs(dt){for(const m of mobs.values()){if(m.dead)continue;const dx=player.x-m.x;if(Math.abs(dx)<420){m.vx=Math.sign(dx)*55;m.facing=Math.sign(dx)||1;if(overlaps(m,player)&&now()>m.attackAt){m.attackAt=now()+1.1;
+   if(isParrying(player))broadcastCombat(channel,{id:playerId,type:"mob_parried",targetId:playerId,mobId:m.id});else if(isBlocking(player)){player.guardBrokenUntil=now()+COMBAT.guardBreak;player.guardUntil=player.parryUntil=0;}else damagePlayer(m.damage,m.id,"mob");}}
+ m.vy+=GRAVITY*dt;move(m,m.vx*dt,m.vy*dt);}}
+function receiveCombat(p){if(!p||p.id===playerId)return;const peer=peers.get(p.id);
+ if(p.type==="mob_spawn"&&p.mob){if(!mobs.has(p.mob.id))mobs.set(p.mob.id,{...p.mob,w:22,h:26,damage:10,dead:false,attackAt:0});return;}
+ if(p.type==="mob_damage"){const m=mobs.get(p.mobId);if(m&&!m.dead){m.hp-=p.amount;if(m.hp<=0){m.dead=true;}}return;}
+ if(!peer)return;const t=now();
+ if(p.type==="attack"){peer.attackUntil=t+COMBAT.attackDuration;peer.attackHit=false;peer.facing=p.facing??peer.facing;return;}
+ if(p.type==="parry_start"){peer.parryUntil=t+COMBAT.parryWindow;peer.guardUntil=t+9999;return;}
+ if(p.type==="guard_end"){peer.guardUntil=peer.parryUntil=0;return;}
+ if(p.targetId!==playerId)return;
+ if(p.type==="damage"){damagePlayer(p.amount,p.source,p.kind);return;}
+ if(p.type==="parried"){peer.guardBrokenUntil=t+COMBAT.guardBreak;peer.attackUntil=0;return;}
+ if(p.type==="guard_hit"){player.guardBrokenUntil=t+COMBAT.guardBreak;player.guardUntil=player.parryUntil=0;return;}
+ if(p.type==="levelup")return;
+}
+function handleKey(e,down){const k=e.key.toLowerCase();if(["a","arrowleft"].includes(k))keys.left=down;if(["d","arrowright"].includes(k))keys.right=down;
+ if(e.key===" "||k==="w"||k==="arrowup"){if(down&&!keys.jump)keys.jump=true;if(!down)keys.jump=false;}
+ if(k==="f"){if(down&&!keys.guard)startGuard();keys.guard=down;} if(k>="1"&&k<="9"&&down)castSkill(+k);if(k==="0"&&down)castSkill(10);
+ if([" ","arrowleft","arrowright","arrowup"].includes(k))e.preventDefault();}
+addEventListener("keydown",e=>{if(running)handleKey(e,true)});addEventListener("keyup",e=>{if(running)handleKey(e,false)});
+canvas.addEventListener("mousedown",e=>{if(e.button===0&&running)startAttack()});canvas.addEventListener("contextmenu",e=>e.preventDefault());
+addEventListener("keyup",e=>{if(e.key.toLowerCase()==="f"&&running)endGuard()});
+
+function update(dt){const t=now();if(player.attackUntil&&t>=player.attackUntil){player.attackUntil=0;player.attackHit=false}if(!keys.guard&&player.guardUntil)endGuard();
+ const stunned=t<player.guardBrokenUntil;if(!stunned){if(keys.left&&!keys.right){player.vx=-player.speed;player.facing=-1}else if(keys.right&&!keys.left){player.vx=player.speed;player.facing=1}else player.vx=0;
+  if(keys.jump&&player.onGround&&!isBlocking(player)){player.vy=-player.jumpForce;player.onGround=false;keys.jump=false;}}
+ else player.vx=0;player.vy=Math.min(1200,player.vy+GRAVITY*dt);move(player,player.vx*dt,player.vy*dt);if(isAttacking(player))processAttack();spawnMobs(dt);updateMobs(dt);
+ camera.x=Math.max(0,Math.min(player.x-innerWidth/2,Math.max(0,MAP_COLS*TILE-innerWidth)));camera.y=Math.max(0,Math.min(player.y-innerHeight/2,Math.max(0,MAP_ROWS*TILE-innerHeight)));
+ broadcastTimer+=dt;if(broadcastTimer>1/15){broadcastTimer=0;broadcastPosition(channel,playerId,player.x,player.y,player.facing,player.hp,player.maxHp);}
+ document.getElementById("hud-time").textContent=cycleText();document.getElementById("hud-hp").textContent=`HP ${player.hp}/100`;document.getElementById("hud-level").textContent=`LV ${player.level} · EXP ${player.exp}/${player.expNext}`;}
+function drawCharacter(sx,sy,color,facing,label,state){ctx.fillStyle=color;ctx.fillRect(sx,sy,20,30);ctx.fillStyle="#111";ctx.fillRect(facing===1?sx+14:sx+2,sy+6,4,4);
+ const t=now();if(isBlocking(state)){ctx.strokeStyle="#eee";ctx.lineWidth=3;ctx.strokeRect(sx-3,sy-3,26,36)}if(isParrying(state)){ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.strokeRect(sx-5,sy-5,30,40)}
+ if(isAttacking(state)){const b=attackBox(state);ctx.fillStyle="rgba(255,190,80,.3)";ctx.fillRect(b.x-(state.x-sx),b.y-(state.y-sy),b.w,b.h)}
+ ctx.font="10px monospace";ctx.fillStyle="#ead9b0";ctx.textAlign="center";ctx.fillText(label||"",sx+10,sy-6);
+ ctx.fillStyle="#421d1d";ctx.fillRect(sx-4,sy-16,28,4);ctx.fillStyle="#62d06b";const hp=Math.max(0,Math.min(1,(state.hp??100)/(state.maxHp??100)));ctx.fillRect(sx-4,sy-16,28*hp,4);}
+function drawMob(m){const sx=m.x-camera.x,sy=m.y-camera.y;ctx.fillStyle="#7b4b39";ctx.fillRect(sx,sy,m.w,m.h);ctx.fillStyle="#f0c36b";ctx.fillRect(sx+(m.facing===-1?3:15),sy+6,4,4);ctx.fillStyle="#421d1d";ctx.fillRect(sx-4,sy-8,30,4);ctx.fillStyle="#e36c58";ctx.fillRect(sx-4,sy-8,30*Math.max(0,m.hp/m.maxHp),4);}
+function draw(){const night=isNight();ctx.fillStyle=night?"#080d1c":"#26314a";ctx.fillRect(0,0,canvas.width,canvas.height);
+ const g=ctx.createLinearGradient(0,0,0,canvas.height);g.addColorStop(0,night?"#111936":"#4e80b0");g.addColorStop(1,night?"#05060c":"#b0c9d9");ctx.fillStyle=g;ctx.fillRect(0,0,canvas.width,canvas.height);
+ const sc=Math.max(0,Math.floor(camera.x/TILE)-1),ec=Math.min(MAP_COLS,Math.ceil((camera.x+canvas.width)/TILE)+1),sr=Math.max(0,Math.floor(camera.y/TILE)-1),er=Math.min(MAP_ROWS,Math.ceil((camera.y+canvas.height)/TILE)+1);
+ for(let r=sr;r<er;r++)for(let c=sc;c<ec;c++)if(map[r][c]){const sx=c*TILE-camera.x,sy=r*TILE-camera.y;ctx.fillStyle=!isSolid(c,r-1)?"#5c8253":"#4a3a2a";ctx.fillRect(sx,sy,TILE,TILE);}
+ for(const m of mobs.values())if(!m.dead)drawMob(m);for(const p of peers.values())drawCharacter(p.x-camera.x,p.y-camera.y,"#3a5a70",p.facing,p.username,p);
+ drawCharacter(player.x-camera.x,player.y-camera.y,"#d98b3f",player.facing,player.username,player);
+ ctx.font="12px monospace";ctx.textAlign="left";ctx.fillStyle="#ead9b0";ctx.fillText(`${cycleText()} · mobs ${[...mobs.values()].filter(m=>!m.dead).length}/${WORLD.mobCap}`,12,canvas.height-34);
+ ctx.fillText(`M1 ${COMBAT.m1Damage} dmg · F parry/block · 1-${Math.min(10,player.skills.length)} skills`,12,canvas.height-16);
+}
+function loop(time){if(!running)return;const dt=Math.min((time-lastTime)/1000,1/30);lastTime=time;update(dt);draw();rafId=requestAnimationFrame(loop)}
+
+async function loadServers(){const r=await fetchServers();servers=r.servers;serverSelect.innerHTML=servers.map(s=>`<option value="${s.id}">${s.name}</option>`).join("");serverListEl.innerHTML=servers.map(s=>`<li><span>${s.name}</span><span>${s.description||""}</span></li>`).join("");serverStatus.textContent=r.live?"connected to Supabase":"offline/demo worlds";playBtn.disabled=!servers.length;}
 loadServers();
-
-playBtn.addEventListener("click", () => {
-  const username = usernameInput.value.trim() || "Wanderer";
-  const serverId = serverSelect.value;
-  const server = servers.find((s) => s.id === serverId);
-  if (!server) {
-    menuError.textContent = "pick a world first";
-    return;
-  }
-  startGame(server, username);
-});
-
-leaveBtn.addEventListener("click", () => {
-  stopGame();
-  gameScreen.classList.add("hidden");
-  menuScreen.classList.remove("hidden");
-});
-
-// ============================================================
-// 2. WORLD
-// ============================================================
-const TILE = 32;
-const MAP_ROWS = 20;
-const MAP_COLS = 120;
-
-function generateMap() {
-  const map = Array.from({ length: MAP_ROWS }, () => new Array(MAP_COLS).fill(0));
-  const groundY = 13;
-
-  for (let x = 0; x < MAP_COLS; x++) {
-    const bump = Math.round(Math.sin(x * 0.15) * 2);
-    const top = Math.max(1, Math.min(MAP_ROWS - 1, groundY + bump));
-
-    for (let y = top; y < MAP_ROWS; y++) map[y][x] = 1;
-
-    if (x % 11 === 0 && x > 5) {
-      const py = top - 4;
-      for (let px = x; px < x + 3 && px < MAP_COLS; px++) {
-        if (py >= 0) map[py][px] = 1;
-      }
-    }
-  }
-  return map;
-}
-
-// ============================================================
-// 3. GAME STATE
-// ============================================================
-const canvas = document.getElementById("game-canvas");
-const ctx = canvas.getContext("2d");
-
-let map;
-let channel = null;
-let playerId;
-let running = false;
-let rafId = null;
-
-const peers = new Map();
-const keys = { left: false, right: false, jump: false, guard: false };
-
-const player = {
-  x: TILE * 4,
-  y: TILE * 5,
-  w: 20,
-  h: 30,
-  vx: 0,
-  vy: 0,
-  onGround: false,
-  facing: 1,
-  speed: 180,
-  jumpForce: 480,
-  username: "Wanderer",
-
-  // Combat state
-  attackUntil: 0,
-  attackCooldownUntil: 0,
-  guardUntil: 0,
-  parryUntil: 0,
-  parryCooldownUntil: 0,
-  guardBrokenUntil: 0,
-};
-
-const COMBAT = {
-  attackDuration: 0.20,     // total attack animation
-  attackCooldown: 0.38,
-  attackRange: 38,
-  attackHeight: 28,
-
-  // F starts a short parry window. If the window ends, holding F becomes a normal block.
-  parryWindow: 0.14,
-  parryCooldown: 0.45,
-  blockGuardBreakTime: 0.90,
-  guardBreakStun: 0.65,
-};
-
-const GRAVITY = 1400;
-const camera = { x: 0, y: 0 };
-
-function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener("resize", resizeCanvas);
-
-// ============================================================
-// 4. INPUT
-// ============================================================
-function handleKey(e, isDown) {
-  const key = e.key.toLowerCase();
-
-  if (["a", "arrowleft"].includes(key)) keys.left = isDown;
-  if (["d", "arrowright"].includes(key)) keys.right = isDown;
-
-  if (e.key === " " || key === "w" || e.key === "arrowup") {
-    // Prevent a held jump key from repeatedly jumping after landing.
-    if (isDown && !keys.jump) keys.jump = true;
-    if (!isDown) keys.jump = false;
-  }
-
-  if (key === "f") {
-    if (isDown && !keys.guard) startGuard();
-    keys.guard = isDown;
-  }
-
-  // Do not let the browser scroll on gameplay keys.
-  if ([" ", "arrowleft", "arrowright", "arrowup"].includes(key)) {
-    e.preventDefault();
-  }
-}
-
-window.addEventListener("keydown", (e) => {
-  if (!running) return;
-  handleKey(e, true);
-});
-
-window.addEventListener("keyup", (e) => {
-  if (!running) return;
-  handleKey(e, false);
-});
-
-canvas.addEventListener("mousedown", (e) => {
-  if (e.button === 0 && running) startAttack();
-});
-
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
-function startAttack() {
-  const now = performance.now() / 1000;
-
-  if (now < player.attackCooldownUntil || now < player.guardBrokenUntil) return;
-
-  // Attacking cancels the current guard/parry.
-  player.guardUntil = 0;
-  player.parryUntil = 0;
-
-  player.attackUntil = now + COMBAT.attackDuration;
-  player.attackCooldownUntil = now + COMBAT.attackCooldown;
-
-  broadcastCombat(channel, {
-    id: playerId,
-    type: "attack",
-    facing: player.facing,
-    at: now,
-  });
-}
-
-function startGuard() {
-  const now = performance.now() / 1000;
-
-  if (now < player.parryCooldownUntil || now < player.guardBrokenUntil) return;
-
-  player.parryUntil = now + COMBAT.parryWindow;
-  player.guardUntil = now + 9999; // while F is held
-  player.parryCooldownUntil = now + COMBAT.parryCooldown;
-
-  broadcastCombat(channel, {
-    id: playerId,
-    type: "parry_start",
-    facing: player.facing,
-    at: now,
-  });
-}
-
-function endGuard() {
-  player.guardUntil = 0;
-  player.parryUntil = 0;
-
-  broadcastCombat(channel, {
-    id: playerId,
-    type: "guard_end",
-    at: performance.now() / 1000,
-  });
-}
-
-window.addEventListener("keyup", (e) => {
-  if (e.key.toLowerCase() === "f" && running) endGuard();
-});
-
-// ============================================================
-// 5. TILE COLLISION
-// ============================================================
-function isSolid(col, row) {
-  // Outside the map is treated as solid. This prevents falling/walking
-  // through the world edges.
-  if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS) return true;
-  return map[row][col] === 1;
-}
-
-function resolveHorizontal(entity, dx) {
-  if (dx === 0) return;
-
-  const top = Math.floor(entity.y / TILE);
-  const bottom = Math.floor((entity.y + entity.h - 0.001) / TILE);
-
-  if (dx > 0) {
-    const right = Math.floor((entity.x + entity.w - 0.001) / TILE);
-    for (let row = top; row <= bottom; row++) {
-      if (isSolid(right, row)) {
-        entity.x = right * TILE - entity.w;
-        entity.vx = 0;
-        return;
-      }
-    }
-  } else {
-    const left = Math.floor(entity.x / TILE);
-    for (let row = top; row <= bottom; row++) {
-      if (isSolid(left, row)) {
-        entity.x = (left + 1) * TILE;
-        entity.vx = 0;
-        return;
-      }
-    }
-  }
-}
-
-function resolveVertical(entity, dy) {
-  entity.onGround = false;
-  if (dy === 0) return;
-
-  const left = Math.floor((entity.x + 0.001) / TILE);
-  const right = Math.floor((entity.x + entity.w - 0.001) / TILE);
-
-  if (dy > 0) {
-    const bottom = Math.floor((entity.y + entity.h - 0.001) / TILE);
-    for (let col = left; col <= right; col++) {
-      if (isSolid(col, bottom)) {
-        entity.y = bottom * TILE - entity.h;
-        entity.vy = 0;
-        entity.onGround = true;
-        return;
-      }
-    }
-  } else {
-    const top = Math.floor(entity.y / TILE);
-    for (let col = left; col <= right; col++) {
-      if (isSolid(col, top)) {
-        entity.y = (top + 1) * TILE;
-        entity.vy = 0;
-        return;
-      }
-    }
-  }
-}
-
-function moveAndCollide(entity, dx, dy) {
-  // Resolve one axis at a time. The old implementation could inspect
-  // multiple tiles and overwrite a correct collision with another tile.
-  entity.x += dx;
-  resolveHorizontal(entity, dx);
-
-  entity.y += dy;
-  resolveVertical(entity, dy);
-
-  // Hard clamp to the playable world.
-  entity.x = Math.max(0, Math.min(entity.x, MAP_COLS * TILE - entity.w));
-  entity.y = Math.max(0, Math.min(entity.y, MAP_ROWS * TILE - entity.h));
-}
-
-// Find a safe spawn directly above the terrain.
-function findSpawn() {
-  const preferredCol = 4;
-  for (let radius = 0; radius < MAP_COLS / 2; radius++) {
-    const candidates = radius === 0
-      ? [preferredCol]
-      : [preferredCol - radius, preferredCol + radius];
-
-    for (const col of candidates) {
-      if (col < 0 || col >= MAP_COLS) continue;
-
-      for (let row = 1; row < MAP_ROWS; row++) {
-        if (isSolid(col, row) && !isSolid(col, row - 1) && !isSolid(col, row - 2)) {
-          return {
-            x: col * TILE + (TILE - player.w) / 2,
-            y: row * TILE - player.h - 0.01,
-          };
-        }
-      }
-    }
-  }
-
-  return { x: TILE * 4, y: TILE * 4 };
-}
-
-// ============================================================
-// 6. COMBAT
-// ============================================================
-function isAttacking(p) {
-  return p.attackUntil > performance.now() / 1000;
-}
-
-function isParrying(p) {
-  return p.parryUntil > performance.now() / 1000;
-}
-
-function isBlocking(p) {
-  return p.guardUntil > performance.now() / 1000 && !isParrying(p);
-}
-
-function getAttackBox(attacker) {
-  const y = attacker.y + 5;
-  return attacker.facing === 1
-    ? { x: attacker.x + attacker.w - 2, y, w: COMBAT.attackRange, h: COMBAT.attackHeight }
-    : { x: attacker.x - COMBAT.attackRange + 2, y, w: COMBAT.attackRange, h: COMBAT.attackHeight };
-}
-
-function overlaps(a, b) {
-  return (
-    a.x < b.x + b.w &&
-    a.x + a.w > b.x &&
-    a.y < b.y + b.h &&
-    a.y + a.h > b.y
-  );
-}
-
-// Local client predicts combat against visible peers. The peer also
-// receives the same event, so both sides can show the result.
-function processLocalAttack() {
-  const now = performance.now() / 1000;
-  if (player.attackUntil <= 0 || player.attackUntil - now > COMBAT.attackDuration * 0.65) return;
-
-  // Make sure one attack can only hit once.
-  if (player.attackHit) return;
-  player.attackHit = true;
-
-  const hitbox = getAttackBox(player);
-
-  for (const peer of peers.values()) {
-    const target = {
-      x: peer.x,
-      y: peer.y,
-      w: player.w,
-      h: player.h,
-    };
-
-    if (!overlaps(hitbox, target)) continue;
-
-    if (peer.parryUntil > now) {
-      broadcastCombat(channel, {
-        id: playerId,
-        type: "parried",
-        targetId: peer.id,
-        at: now,
-      });
-    } else if (peer.guardUntil > now) {
-      broadcastCombat(channel, {
-        id: playerId,
-        type: "guard_hit",
-        targetId: peer.id,
-        at: now,
-      });
-    } else {
-      broadcastCombat(channel, {
-        id: playerId,
-        type: "hit",
-        targetId: peer.id,
-        at: now,
-      });
-    }
-  }
-}
-
-function receiveCombat(payload) {
-  if (!payload || payload.id === playerId) return;
-
-  const peer = peers.get(payload.id);
-  if (!peer) return;
-
-  const now = performance.now() / 1000;
-
-  if (payload.type === "attack") {
-    peer.attackUntil = now + COMBAT.attackDuration;
-    peer.attackHit = false;
-    peer.facing = payload.facing ?? peer.facing;
-    return;
-  }
-
-  if (payload.type === "parry_start") {
-    peer.parryUntil = now + COMBAT.parryWindow;
-    peer.guardUntil = now + 9999;
-    peer.parryCooldownUntil = now + COMBAT.parryCooldown;
-    return;
-  }
-
-  if (payload.type === "guard_end") {
-    peer.guardUntil = 0;
-    peer.parryUntil = 0;
-    return;
-  }
-
-  if (payload.targetId !== playerId) return;
-
-  if (payload.type === "parried") {
-    // A successful parry interrupts the attacker and gives them a short stun.
-    peer.guardBrokenUntil = now + COMBAT.guardBreakStun;
-    peer.attackUntil = 0;
-    peer.attackCooldownUntil = now + COMBAT.guardBreakStun;
-    return;
-  }
-
-  if (payload.type === "guard_hit") {
-    // Blocking an attack is safe, but repeated/poorly timed blocking is
-    // punished by guard break. This makes the defender choose parry timing.
-    player.guardBrokenUntil = now + COMBAT.guardBreakStun;
-    player.guardUntil = 0;
-    player.parryUntil = 0;
-    return;
-  }
-
-  if (payload.type === "hit") {
-    // Simple hit reaction for now. HP/damage can be added to the same event.
-    player.guardBrokenUntil = now + 0.20;
-  }
-}
-
-// ============================================================
-// 7. UPDATE / DRAW
-// ============================================================
-let lastTime = 0;
-let broadcastTimer = 0;
-
-function update(dt) {
-  const now = performance.now() / 1000;
-
-  // Combat timers.
-  if (player.attackUntil > 0 && now >= player.attackUntil) {
-    player.attackUntil = 0;
-    player.attackHit = false;
-  }
-
-  if (player.guardUntil > 0 && !keys.guard) endGuard();
-
-  // Movement is disabled briefly after guard break/parry stun.
-  const stunned = now < player.guardBrokenUntil;
-
-  if (!stunned) {
-    const accel = player.speed;
-
-    if (keys.left && !keys.right) {
-      player.vx = -accel;
-      player.facing = -1;
-    } else if (keys.right && !keys.left) {
-      player.vx = accel;
-      player.facing = 1;
-    } else {
-      player.vx = 0;
-    }
-
-    if (keys.jump && player.onGround && !isBlocking(player)) {
-      player.vy = -player.jumpForce;
-      player.onGround = false;
-      keys.jump = false;
-    }
-  } else {
-    player.vx = 0;
-  }
-
-  player.vy += GRAVITY * dt;
-  if (player.vy > 1200) player.vy = 1200;
-
-  moveAndCollide(player, player.vx * dt, player.vy * dt);
-
-  // Check attacks after movement so the hitbox follows the current position.
-  if (isAttacking(player)) processLocalAttack();
-
-  const viewW = canvas.width;
-  const viewH = canvas.height;
-  camera.x = Math.max(0, Math.min(player.x - viewW / 2, Math.max(0, MAP_COLS * TILE - viewW)));
-  camera.y = Math.max(0, Math.min(player.y - viewH / 2, Math.max(0, MAP_ROWS * TILE - viewH)));
-
-  broadcastTimer += dt;
-  if (broadcastTimer > 1 / 15) {
-    broadcastTimer = 0;
-    broadcastPosition(channel, playerId, player.x, player.y, player.facing);
-  }
-}
-
-function draw() {
-  ctx.fillStyle = "#1a2233";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  grad.addColorStop(0, "#26314a");
-  grad.addColorStop(1, "#12101a");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const startCol = Math.max(0, Math.floor(camera.x / TILE) - 1);
-  const endCol = Math.min(MAP_COLS, Math.ceil((camera.x + canvas.width) / TILE) + 1);
-  const startRow = Math.max(0, Math.floor(camera.y / TILE) - 1);
-  const endRow = Math.min(MAP_ROWS, Math.ceil((camera.y + canvas.height) / TILE) + 1);
-
-  for (let row = startRow; row < endRow; row++) {
-    for (let col = startCol; col < endCol; col++) {
-      if (map[row][col] !== 1) continue;
-
-      const sx = col * TILE - camera.x;
-      const sy = row * TILE - camera.y;
-      const isSurface = !isSolid(col, row - 1);
-
-      ctx.fillStyle = isSurface ? "#5c8253" : "#4a3a2a";
-      ctx.fillRect(sx, sy, TILE, TILE);
-      ctx.strokeStyle = "rgba(0,0,0,0.15)";
-      ctx.strokeRect(sx, sy, TILE, TILE);
-    }
-  }
-
-  for (const p of peers.values()) {
-    drawCharacter(p.x - camera.x, p.y - camera.y, "#3a5a70", p.facing, p.username, p);
-  }
-
-  drawCharacter(player.x - camera.x, player.y - camera.y, "#d98b3f", player.facing, player.username, player);
-
-  // Small combat status display.
-  const now = performance.now() / 1000;
-  let status = "";
-  if (now < player.guardBrokenUntil) status = "GUARD BROKEN";
-  else if (isParrying(player)) status = "PARRY";
-  else if (isBlocking(player)) status = "BLOCK";
-  else if (isAttacking(player)) status = "ATTACK";
-
-  if (status) {
-    ctx.font = "10px monospace";
-    ctx.fillStyle = "#ead9b0";
-    ctx.textAlign = "center";
-    ctx.fillText(status, player.x - camera.x + player.w / 2, player.y - camera.y - 22);
-  }
-}
-
-function drawCharacter(sx, sy, color, facing, label, state) {
-  ctx.fillStyle = color;
-  ctx.fillRect(sx, sy, player.w, player.h);
-
-  // Face direction.
-  ctx.fillStyle = "#12101a";
-  const eyeX = facing === 1 ? sx + player.w - 6 : sx + 2;
-  ctx.fillRect(eyeX, sy + 6, 4, 4);
-
-  // Combat visuals.
-  const now = performance.now() / 1000;
-  if (isBlocking(state)) {
-    ctx.strokeStyle = "#ead9b0";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(sx - 3, sy - 3, player.w + 6, player.h + 6);
-  }
-
-  if (isParrying(state)) {
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(sx - 5, sy - 5, player.w + 10, player.h + 10);
-  }
-
-  if (isAttacking(state)) {
-    const box = getAttackBox(state);
-    ctx.fillStyle = "rgba(217,139,63,0.35)";
-    ctx.fillRect(box.x - (player.x - sx), box.y - (player.y - sy), box.w, box.h);
-  }
-
-  if (state.guardBrokenUntil && state.guardBrokenUntil > now) {
-    ctx.fillStyle = "#8a3636";
-    ctx.fillRect(sx - 4, sy - 10, player.w + 8, 4);
-  }
-
-  ctx.font = "10px monospace";
-  ctx.fillStyle = "#ead9b0";
-  ctx.textAlign = "center";
-  ctx.fillText(label ?? "", sx + player.w / 2, sy - 6);
-}
-
-function loop(time) {
-  if (!running) return;
-  const dt = Math.min((time - lastTime) / 1000, 1 / 30);
-  lastTime = time;
-  update(dt);
-  draw();
-  rafId = requestAnimationFrame(loop);
-}
-
-// ============================================================
-// 8. START / STOP
-// ============================================================
-function startGame(server, username) {
-  map = generateMap();
-
-  player.username = username;
-  playerId = crypto.randomUUID();
-
-  const spawn = findSpawn();
-  player.x = spawn.x;
-  player.y = spawn.y;
-  player.vx = 0;
-  player.vy = 0;
-  player.onGround = true;
-  player.attackUntil = 0;
-  player.attackCooldownUntil = 0;
-  player.guardUntil = 0;
-  player.parryUntil = 0;
-  player.parryCooldownUntil = 0;
-  player.guardBrokenUntil = 0;
-
-  menuScreen.classList.add("hidden");
-  gameScreen.classList.remove("hidden");
-  hudWorld.textContent = server.name;
-  resizeCanvas();
-
-  channel = joinWorldChannel(server.id, playerId, username, {
-    onPeerMove: (payload) => {
-      const old = peers.get(payload.id) || {};
-      peers.set(payload.id, { ...old, ...payload });
-      updatePlayerCount();
-    },
-    onPeerCombat: receiveCombat,
-    onPresenceSync: (state) => {
-      hudPlayers.textContent = `${Object.keys(state).length} online`;
-    },
-    onPeerLeave: (id) => {
-      peers.delete(id);
-      updatePlayerCount();
-    },
-  });
-
-  running = true;
-  lastTime = performance.now();
-  rafId = requestAnimationFrame(loop);
-}
-
-function stopGame() {
-  running = false;
-  if (rafId) cancelAnimationFrame(rafId);
-
-  if (keys.guard) endGuard();
-  keys.left = false;
-  keys.right = false;
-  keys.jump = false;
-  keys.guard = false;
-
-  leaveWorldChannel(channel);
-  channel = null;
-  peers.clear();
-}
-
-function updatePlayerCount() {
-  hudPlayers.textContent = `${peers.size + 1} online`;
-}
+playBtn.addEventListener("click",async()=>{const server=servers.find(s=>s.id===serverSelect.value);if(!server)return;await startGame(server,usernameInput.value.trim()||"Wanderer")});
+leaveBtn.addEventListener("click",()=>{stopGame();gameScreen.classList.add("hidden");menuScreen.classList.remove("hidden")});
+
+async function startGame(server,username){map=generateMap();serverId=server.id;await loadProgress();player.username=usernameInput.value.trim()||username;playerId=crypto.randomUUID();player.hp=100;const sp=findSpawn();Object.assign(player,{x:sp.x,y:sp.y,vx:0,vy:0,onGround:true,attackUntil:0,attackCooldownUntil:0,guardUntil:0,parryUntil:0,guardBrokenUntil:0});
+ menuScreen.classList.add("hidden");gameScreen.classList.remove("hidden");hudWorld.textContent=server.name;resizeCanvas();
+ channel=joinWorldChannel(server.id,playerId,player.username,{onPeerMove:p=>{if(p.id===playerId)return;const old=peers.get(p.id)||{w:20,h:30,hp:100,maxHp:100};peers.set(p.id,{...old,...p});updatePlayerCount()},onPeerCombat:receiveCombat,onPresenceSync:s=>{hudPlayers.textContent=`${Object.keys(s).length} online`},onPeerLeave:id=>{peers.delete(id);updatePlayerCount()}});
+ running=true;lastTime=performance.now();rafId=requestAnimationFrame(loop);saveProgress();}
+function stopGame(){running=false;if(rafId)cancelAnimationFrame(rafId);if(keys.guard)endGuard();leaveWorldChannel(channel);channel=null;peers.clear();mobs.clear();saveProgress();}
+function updatePlayerCount(){hudPlayers.textContent=`${peers.size+1} online`;}
