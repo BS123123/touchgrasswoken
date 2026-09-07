@@ -98,7 +98,7 @@ const player = {
   vy: 0,
   onGround: false,
   facing: 1,
-  speed: 220,
+  speed: 50,
   jumpForce: 480,
   username: "Wanderer",
 };
